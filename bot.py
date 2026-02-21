@@ -922,6 +922,25 @@ def health():
     })
 
 
+# ─── Self-Ping (Keep Railway Awake) ──────────────────────────────────────────
+
+def self_ping():
+    """Pings /health every 5 minutes to prevent Railway free tier from sleeping."""
+    app_url = os.getenv("RAILWAY_STATIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    if not app_url:
+        log.warning("No app URL for self-ping — bot may sleep and miss send time.")
+        return
+    ping_url = f"https://{app_url}/health"
+    log.info(f"Self-ping active → {ping_url} every 5 min")
+    while True:
+        try:
+            resp = requests.get(ping_url, timeout=10)
+            log.info(f"Ping OK ({resp.status_code}) — Nairobi: {now_eat().strftime('%H:%M EAT')}")
+        except Exception as ex:
+            log.warning(f"Ping failed: {ex}")
+        time.sleep(300)
+
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def setup_webhook():
@@ -932,5 +951,6 @@ def setup_webhook():
 if __name__ == "__main__":
     setup_webhook()
     threading.Thread(target=run_scheduler, daemon=True).start()
+    threading.Thread(target=self_ping,     daemon=True).start()
     log.info(f"Bot starting — daily broadcast at {SEND_TIME} Nairobi time (EAT)")
     app.run(host="0.0.0.0", port=PORT)
