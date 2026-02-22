@@ -36,6 +36,7 @@ EAT                = ZoneInfo("Africa/Nairobi")   # East Africa Time = UTC+3
 
 SUBSCRIBERS_FILE   = "subscribers.json"
 SENT_IDS_FILE      = "sent_ids.json"
+LAST_RUN_FILE      = "last_run.json"
 TELEGRAM_API       = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 HEADERS            = {"User-Agent": "Mozilla/5.0 (compatible; ScholarshipBot/1.0)"}
 
@@ -81,6 +82,16 @@ def save_sent_ids(ids):
 def now_eat():
     """Current time in Kenyan timezone."""
     return datetime.now(EAT)
+
+def load_last_run():
+    if os.path.exists(LAST_RUN_FILE):
+        with open(LAST_RUN_FILE) as f:
+            return json.load(f).get("last_sent_day")
+    return None
+
+def save_last_run(day_str):
+    with open(LAST_RUN_FILE, "w") as f:
+        json.dump({"last_sent_day": day_str}, f)
 
 
 # ─── Telegram Helpers ────────────────────────────────────────────────────────
@@ -545,16 +556,17 @@ def run_scheduler():
     """
     Bulletproof scheduler using Kenyan time.
     Checks every 20 seconds. If it is past send time and not yet sent today, sends immediately.
-    This means even if the bot restarts mid-day, it will still send that day.
+    Uses persistent file storage so restarts don't trigger double sends (or miss sends).
     """
     log.info(f"Scheduler started — daily broadcast at {SEND_TIME} EAT (Nairobi)")
-    last_sent_day = None
     send_hour, send_min = map(int, SEND_TIME.split(":"))
 
     while True:
         try:
-            now       = now_eat()
-            today_str = now.strftime("%Y-%m-%d")
+            now           = now_eat()
+            today_str     = now.strftime("%Y-%m-%d")
+            last_sent_day = load_last_run()
+            
             now_total = now.hour * 60 + now.minute
             snd_total = send_hour * 60 + send_min
 
@@ -562,7 +574,7 @@ def run_scheduler():
             if now_total >= snd_total and last_sent_day != today_str:
                 log.info(f"Sending daily broadcast — Nairobi: {now.strftime('%H:%M EAT')}")
                 broadcast_opportunities()
-                last_sent_day = today_str
+                save_last_run(today_str)
         except Exception as ex:
             log.error(f"Scheduler error: {ex}")
         time.sleep(20)
@@ -806,6 +818,7 @@ ADMIN_HTML = """
     <div class="card">
       <h2>⚡ Actions</h2>
       <button class="btn btn-success" onclick="broadcast()">📤 Send to All Subscribers Now</button>
+      <button class="btn btn-primary" onclick="testBroadcast()">🧪 Send TEST to Admin Only</button>
       <button class="btn btn-primary" onclick="loadSubscribers()">🔄 Refresh Subscribers</button>
       <div class="result-box" id="resultBox"></div>
     </div>
@@ -882,6 +895,16 @@ function broadcast() {
       showToast("✅ Done!");
     }).catch(() => { box.textContent = "❌ Something went wrong."; });
 }
+function testBroadcast() {
+  const box = document.getElementById("resultBox");
+  box.style.display = "block";
+  box.textContent = "⏳ Sending test broadcast to admin...";
+  fetch("/admin/test-broadcast", { method: "POST", headers: { "X-Admin-Password": password } })
+    .then(r => r.json()).then(d => {
+      box.textContent = d.success ? "✅ Test message sent to admin!" : "❌ " + d.error;
+      showToast(d.success ? "✅ Done!" : "❌ Error");
+    }).catch(() => { box.textContent = "❌ Something went wrong."; });
+}
 function showToast(msg) {
   const t = document.getElementById("toast");
   t.textContent = msg; t.style.display = "block";
@@ -923,6 +946,23 @@ def admin_broadcast():
     if not check_admin(request): return jsonify({"error": "Unauthorized"}), 401
     return jsonify(broadcast_opportunities())
 
+@app.route("/admin/test-broadcast", methods=["POST"])
+def admin_test_broadcast():
+    if not check_admin(request): return jsonify({"error": "Unauthorized"}), 401
+    # Try to find a 'chat_id' for testing (e.g. from the .env if set, or just use first subscriber)
+    test_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not test_id:
+        subs = load_subscribers()
+        if subs: test_id = list(subs.keys())[0]
+    
+    if not test_id:
+        return jsonify({"success": False, "error": "No subscriber found for testing"})
+    
+    all_opps = get_all_opportunities()
+    message = build_message(all_opps[:MAX_OPPS])
+    success = send_message(test_id, "🧪 <b>TEST BROADCAST</b>\n\n" + message)
+    return jsonify({"success": success, "error": None if success else "Telegram failed"})
+
 @app.route("/health")
 def health():
     return jsonify({
@@ -936,11 +976,12 @@ def health():
 
 def self_ping():
     """Pings /health every 5 minutes to prevent Railway free tier from sleeping."""
-    app_url = os.getenv("RAILWAY_STATIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    app_url = os.getenv("RAILWAY_PUBLIC_DOMAIN") or os.getenv("RAILWAY_STATIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
     if not app_url:
         log.warning("No app URL for self-ping — bot may sleep and miss send time.")
         return
-    ping_url = f"https://{app_url}/health"
+    prefix = "" if app_url.startswith("http") else "https://"
+    ping_url = f"{prefix}{app_url}/health"
     log.info(f"Self-ping active → {ping_url} every 5 min")
     while True:
         try:
