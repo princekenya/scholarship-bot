@@ -658,108 +658,114 @@ def run_scheduler():
 
 # ─── Webhook Handler ─────────────────────────────────────────────────────────
 
+def process_update(data):
+    """Processes Telegram updates in a background thread to prevent retries."""
+    try:
+        # Button taps
+        if "callback_query" in data:
+            cb      = data["callback_query"]
+            chat_id = str(cb["message"]["chat"]["id"])
+            cb_id   = cb["id"]
+            action  = cb.get("data", "")
+            answer_callback(cb_id)
+            category = action.replace("cat_", "") if action.startswith("cat_") else None
+            if category == "all":
+                category = None
+            send_message(chat_id, "⏳ Fetching latest opportunities...")
+            opps    = get_all_opportunities(category)
+            send_message(chat_id, build_message(opps, category), reply_markup=MAIN_BUTTONS)
+            return
+
+        # Text messages
+        message  = data.get("message", {})
+        chat     = message.get("chat", {})
+        text     = message.get("text", "").strip()
+        chat_id  = str(chat.get("id", ""))
+        name     = chat.get("first_name", "Friend")
+        username = chat.get("username", "")
+        if not chat_id:
+            return
+
+        subscribers = load_subscribers()
+
+        if text == "/start":
+            if chat_id not in subscribers:
+                subscribers[chat_id] = {
+                    "name": name, "username": username,
+                    "joined": now_eat().strftime("%Y-%m-%d %H:%M EAT")
+                }
+                save_subscribers(subscribers)
+                log.info(f"New subscriber: {name} ({chat_id})")
+
+            send_message(chat_id,
+                f"👋 <b>Habari {name}!</b> Welcome to the <b>Kenya Scholarship Bot!</b> 🇰🇪🎓\n\n"
+                f"I send you <b>direct application links</b> for scholarships, fellowships, internships and grants — "
+                f"all open to Kenyan students!\n\n"
+                f"📅 <b>Daily update:</b> Every day at <b>{SEND_TIME} Nairobi time</b>\n"
+                f"🔗 <b>All links</b> go directly to application pages\n"
+                f"✅ <b>Minimum 15 opportunities</b> every broadcast\n\n"
+                f"👇 <b>What are you looking for today?</b>",
+                reply_markup=MAIN_BUTTONS
+            )
+
+        elif text == "/stop":
+            if chat_id in subscribers:
+                del subscribers[chat_id]
+                save_subscribers(subscribers)
+            send_message(chat_id,
+                "😢 You've been unsubscribed.\n\nType /start anytime to come back!\n\nGood luck! 🌟"
+            )
+
+        elif text in ["/opportunities", "/opps"]:
+            send_message(chat_id, "⏳ Fetching the latest opportunities...")
+            opps = get_all_opportunities()
+            send_message(chat_id, build_message(opps), reply_markup=MAIN_BUTTONS)
+
+        elif text == "/count":
+            send_message(chat_id,
+                f"👥 <b>Total subscribers:</b> {len(subscribers)}\n\n"
+                f"🕐 <b>Current Nairobi time:</b> {now_eat().strftime('%I:%M %p EAT')}",
+                reply_markup=MAIN_BUTTONS
+            )
+
+        elif text == "/time":
+            send_message(chat_id,
+                f"🕐 <b>Current Nairobi time:</b> {now_eat().strftime('%A, %d %b %Y · %I:%M %p EAT')}\n"
+                f"📅 <b>Next broadcast:</b> Today/Tomorrow at <b>{SEND_TIME} EAT</b>",
+                reply_markup=MAIN_BUTTONS
+            )
+
+        elif text == "/help":
+            send_message(chat_id,
+                "🤖 <b>Kenya Scholarship & Opportunity Bot</b>\n\n"
+                "📡 <b>Sources:</b> Opportunity Desk, Scholars4Dev, Youth Opportunities + 30 curated links\n"
+                "🔗 <b>All links</b> go directly to application pages\n"
+                "✅ <b>Minimum 15</b> opportunities per broadcast\n"
+                f"⏰ <b>Sends daily at {SEND_TIME} Nairobi time</b>\n\n"
+                "<b>/start</b> — Subscribe\n"
+                "<b>/opportunities</b> — Get all opportunities now\n"
+                "<b>/time</b> — Check current Nairobi time\n"
+                "<b>/stop</b> — Unsubscribe\n"
+                "<b>/help</b> — This message\n\n"
+                "👇 Or tap a category:",
+                reply_markup=MAIN_BUTTONS
+            )
+
+        else:
+            send_message(chat_id,
+                "👇 Choose what you're looking for:",
+                reply_markup=MAIN_BUTTONS
+            )
+            
+    except Exception as e:
+        log.error(f"Error processing update: {e}")
+
 @app.route(f"/webhook/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
 def webhook():
     data = request.get_json()
-    if not data:
-        return "ok"
-
-    # Button taps
-    if "callback_query" in data:
-        cb      = data["callback_query"]
-        chat_id = str(cb["message"]["chat"]["id"])
-        cb_id   = cb["id"]
-        action  = cb.get("data", "")
-        answer_callback(cb_id)
-        category = action.replace("cat_", "") if action.startswith("cat_") else None
-        if category == "all":
-            category = None
-        send_message(chat_id, "⏳ Fetching latest opportunities...")
-        opps    = get_all_opportunities(category)
-        send_message(chat_id, build_message(opps, category), reply_markup=MAIN_BUTTONS)
-        return "ok"
-
-    # Text messages
-    message  = data.get("message", {})
-    chat     = message.get("chat", {})
-    text     = message.get("text", "").strip()
-    chat_id  = str(chat.get("id", ""))
-    name     = chat.get("first_name", "Friend")
-    username = chat.get("username", "")
-    if not chat_id:
-        return "ok"
-
-    subscribers = load_subscribers()
-
-    if text == "/start":
-        if chat_id not in subscribers:
-            subscribers[chat_id] = {
-                "name": name, "username": username,
-                "joined": now_eat().strftime("%Y-%m-%d %H:%M EAT")
-            }
-            save_subscribers(subscribers)
-            log.info(f"New subscriber: {name} ({chat_id})")
-
-        send_message(chat_id,
-            f"👋 <b>Habari {name}!</b> Welcome to the <b>Kenya Scholarship Bot!</b> 🇰🇪🎓\n\n"
-            f"I send you <b>direct application links</b> for scholarships, fellowships, internships and grants — "
-            f"all open to Kenyan students!\n\n"
-            f"📅 <b>Daily update:</b> Every day at <b>{SEND_TIME} Nairobi time</b>\n"
-            f"🔗 <b>All links</b> go directly to application pages\n"
-            f"✅ <b>Minimum 15 opportunities</b> every broadcast\n\n"
-            f"👇 <b>What are you looking for today?</b>",
-            reply_markup=MAIN_BUTTONS
-        )
-
-    elif text == "/stop":
-        if chat_id in subscribers:
-            del subscribers[chat_id]
-            save_subscribers(subscribers)
-        send_message(chat_id,
-            "😢 You've been unsubscribed.\n\nType /start anytime to come back!\n\nGood luck! 🌟"
-        )
-
-    elif text in ["/opportunities", "/opps"]:
-        send_message(chat_id, "⏳ Fetching the latest opportunities...")
-        opps = get_all_opportunities()
-        send_message(chat_id, build_message(opps), reply_markup=MAIN_BUTTONS)
-
-    elif text == "/count":
-        send_message(chat_id,
-            f"👥 <b>Total subscribers:</b> {len(subscribers)}\n\n"
-            f"🕐 <b>Current Nairobi time:</b> {now_eat().strftime('%I:%M %p EAT')}",
-            reply_markup=MAIN_BUTTONS
-        )
-
-    elif text == "/time":
-        send_message(chat_id,
-            f"🕐 <b>Current Nairobi time:</b> {now_eat().strftime('%A, %d %b %Y · %I:%M %p EAT')}\n"
-            f"📅 <b>Next broadcast:</b> Today/Tomorrow at <b>{SEND_TIME} EAT</b>",
-            reply_markup=MAIN_BUTTONS
-        )
-
-    elif text == "/help":
-        send_message(chat_id,
-            "🤖 <b>Kenya Scholarship & Opportunity Bot</b>\n\n"
-            "📡 <b>Sources:</b> Opportunity Desk, Scholars4Dev, Youth Opportunities + 30 curated links\n"
-            "🔗 <b>All links</b> go directly to application pages\n"
-            "✅ <b>Minimum 15</b> opportunities per broadcast\n"
-            f"⏰ <b>Sends daily at {SEND_TIME} Nairobi time</b>\n\n"
-            "<b>/start</b> — Subscribe\n"
-            "<b>/opportunities</b> — Get all opportunities now\n"
-            "<b>/time</b> — Check current Nairobi time\n"
-            "<b>/stop</b> — Unsubscribe\n"
-            "<b>/help</b> — This message\n\n"
-            "👇 Or tap a category:",
-            reply_markup=MAIN_BUTTONS
-        )
-
-    else:
-        send_message(chat_id,
-            "👇 Choose what you're looking for:",
-            reply_markup=MAIN_BUTTONS
-        )
-
+    if data:
+        # Offload logic to background thread to return 200 OK instantly
+        threading.Thread(target=process_update, args=(data,), daemon=True).start()
     return "ok"
 
 
