@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 # ─── Config ──────────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 SEND_TIME          = os.getenv("SEND_TIME", "09:00")   # Kenyan time (EAT)
-MAX_OPPS           = int(os.getenv("MAX_OPPS", "15"))
+MAX_OPPS           = int(os.getenv("MAX_OPPS", "25"))
 ADMIN_PASSWORD     = os.getenv("ADMIN_PASSWORD", "scholar2024")
 PORT               = int(os.getenv("PORT", "5000"))
 TEST_INTERVAL_MINS = int(os.getenv("TEST_INTERVAL_MINS", "0"))  # 0 or missing = Daily mode
@@ -468,20 +468,40 @@ def get_all_opportunities(category=None):
     # Start with curated (always reliable, direct links)
     curated = get_curated_opportunities()
 
-    # Add live RSS sources on top
-    live = []
-    live += get_opportunity_desk()
-    live += get_scholars4dev()
-    live += get_youth_opportunities()
-
-    all_opps = curated + live
+    # Add live RSS sources on top (Deep Discovery)
+    all_results = []
+    sources = [
+        get_scholarship_region,
+        get_afterschool_africa,
+        get_opportunity_desk,
+        get_opportunities_for_africans,
+        get_advance_africa,
+        get_scholarship_positions,
+        get_scholars4dev, # Keep existing one
+        get_youth_opportunities,
+        get_bright_scholarships,
+        get_world_scholarship_forum,
+        get_scholarships_ads
+    ]
+    
+    log.info(f"Deep Discovery: Polling {len(sources)} major aggregators...")
+    for getter in sources:
+        try:
+            res = getter()
+            all_results.extend(res)
+            log.info(f"   + {len(res)} from {getter.__name__}")
+        except Exception as e:
+            log.error(f"Error polling {getter.__name__}: {e}")
+            
+    all_opps = curated + all_results
 
     # Filter by category
     if category and category != "all":
         all_opps = [o for o in all_opps if o["category"] == category]
 
-    # Deduplicate by title
-    seen, unique = set(), []
+    # Deduplicate by URL first (more robust than title for RSS)
+    seen_urls = set()
+    unique_by_url = []
     for o in all_opps:
         key = o["title"].lower().strip()[:60]
         if key not in seen and o["title"]:
