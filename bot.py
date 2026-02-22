@@ -58,6 +58,11 @@ MAIN_BUTTONS = {
 
 app = Flask(__name__)
 
+# ─── Cache ───────────────────────────────────────────────────────────────────
+GLOBAL_CACHE      = []
+LAST_FETCH_TIME   = None
+CACHE_EXPIRY_MINS = 15
+
 
 # ─── Storage ─────────────────────────────────────────────────────────────────
 
@@ -117,7 +122,7 @@ def send_message(chat_id, text, parse_mode="HTML", reply_markup=None):
         payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
         if reply_markup:
             payload["reply_markup"] = reply_markup
-        resp = requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=15)
+        resp = requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=8)
         return resp.ok
     except Exception as ex:
         log.error(f"Telegram error to {chat_id}: {ex}")
@@ -376,7 +381,7 @@ SCHOLARSHIP_KEYWORDS = [
 
 def get_opportunity_desk():
     try:
-        resp = requests.get("https://opportunitydesk.org/feed/", headers=HEADERS, timeout=15)
+        resp = requests.get("https://opportunitydesk.org/feed/", headers=HEADERS, timeout=8)
         resp.raise_for_status()
         root    = ET.fromstring(resp.content)
         channel = root.find("channel")
@@ -402,7 +407,7 @@ def get_opportunity_desk():
 
 def get_scholars4dev():
     try:
-        resp = requests.get("https://www.scholars4dev.com/feed/", headers=HEADERS, timeout=15)
+        resp = requests.get("https://www.scholars4dev.com/feed/", headers=HEADERS, timeout=8)
         resp.raise_for_status()
         root    = ET.fromstring(resp.content)
         channel = root.find("channel")
@@ -426,7 +431,7 @@ def get_scholars4dev():
 
 def get_youth_opportunities():
     try:
-        resp = requests.get("https://www.youthop.com/feed", headers=HEADERS, timeout=15)
+        resp = requests.get("https://www.youthop.com/feed", headers=HEADERS, timeout=8)
         resp.raise_for_status()
         root    = ET.fromstring(resp.content)
         channel = root.find("channel")
@@ -463,28 +468,31 @@ def detect_category(title):
 
 # ─── Aggregator ──────────────────────────────────────────────────────────────
 
-def get_all_opportunities(category=None):
-    log.info(f"Fetching all opportunities (category={category})")
+def get_all_opportunities(category=None, use_cache=True):
+    global GLOBAL_CACHE, LAST_FETCH_TIME
+    
+    # Check cache if allowed
+    now = datetime.now()
+    if use_cache and LAST_FETCH_TIME:
+        diff = (now - LAST_FETCH_TIME).total_seconds() / 60
+        if diff < CACHE_EXPIRY_MINS and GLOBAL_CACHE:
+            log.info(f"Using cache ({int(diff)} min old, {len(GLOBAL_CACHE)} items)")
+            opps = GLOBAL_CACHE
+            if category and category != "all":
+                opps = [o for o in opps if o["category"] == category]
+            return opps
 
-    # Start with curated (always reliable, direct links)
+    log.info(f"Fetching all opportunities (category={category})")
     curated = get_curated_opportunities()
 
-    # Add live RSS sources on top (Deep Discovery)
     sources = [
-        get_scholarship_region,
-        get_afterschool_africa,
-        get_opportunity_desk,
-        get_opportunities_for_africans,
-        get_advance_africa,
-        get_scholarship_positions,
-        get_scholars4dev,
-        get_youth_opportunities,
-        get_bright_scholarships,
-        get_world_scholarship_forum,
-        get_scholarships_ads
+        get_scholarship_region, get_afterschool_africa, get_opportunity_desk,
+        get_opportunities_for_africans, get_advance_africa, get_scholarship_positions,
+        get_scholars4dev, get_youth_opportunities, get_bright_scholarships,
+        get_world_scholarship_forum, get_scholarships_ads
     ]
     
-    log.info(f"Deep Discovery: Polling {len(sources)} major aggregators in parallel...")
+    log.info(f"Deep Discovery: Polling {len(sources)} sources in parallel...")
     all_results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         future_to_source = {executor.submit(getter): getter.__name__ for getter in sources}
@@ -499,21 +507,25 @@ def get_all_opportunities(category=None):
             
     all_opps = curated + all_results
 
-    # Filter by category
-    if category and category != "all":
-        all_opps = [o for o in all_opps if o["category"] == category]
-
-    # Deduplicate by URL first (more robust than title for RSS)
-    seen_urls = set()
-    unique_by_url = []
+    # Update cache (global, for all categories)
+    # Deduplicate before caching
+    seen_keys = set()
+    cleaned = []
     for o in all_opps:
         key = o["title"].lower().strip()[:60]
-        if key not in seen and o["title"]:
-            seen.add(key)
-            unique.append(o)
+        if key not in seen_keys and o["title"]:
+            seen_keys.add(key)
+            cleaned.append(o)
+    
+    GLOBAL_CACHE = cleaned
+    LAST_FETCH_TIME = now
+    log.info(f"Cache updated: {len(GLOBAL_CACHE)} unique opportunities")
 
-    log.info(f"Total unique: {len(unique)}")
-    return unique
+    # Return filtered
+    if category and category != "all":
+        cleaned = [o for o in cleaned if o["category"] == category]
+    
+    return cleaned
 
 
 # ─── Message Builder ─────────────────────────────────────────────────────────
