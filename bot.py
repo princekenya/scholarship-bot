@@ -10,7 +10,6 @@ import os
 import json
 import logging
 import requests
-import schedule
 import time
 import threading
 import concurrent.futures
@@ -472,7 +471,7 @@ def background_cache_refresh():
     """Background thread that keeps the memory cache warm every 20 minutes."""
     log.info("Background cache refresher started (20 min interval)")
     # Initial wait to let the bot boot up
-    time.sleep(5) 
+    time.sleep(5)
     while True:
         try:
             log.info("Lightning Mode: Triggering background fetch...")
@@ -480,14 +479,14 @@ def background_cache_refresh():
             log.info("Lightning Mode: Background cache update successful.")
         except Exception as e:
             log.error(f"Lightning Mode: Background refresh error: {e}")
-        time.sleep(1200) # 20 minutes
+        time.sleep(1200)  # 20 minutes
 
 
 # ─── Aggregator ──────────────────────────────────────────────────────────────
 
 def get_all_opportunities(category=None, use_cache=True):
     global GLOBAL_CACHE, LAST_FETCH_TIME
-    
+
     # Check cache if allowed
     now = datetime.now()
     if use_cache and LAST_FETCH_TIME:
@@ -502,13 +501,13 @@ def get_all_opportunities(category=None, use_cache=True):
     log.info(f"Fetching all opportunities (category={category})")
     curated = get_curated_opportunities()
 
+    # Only use defined RSS getters (curated + 3 live feeds guarantee 15+ links)
     sources = [
-        get_scholarship_region, get_afterschool_africa, get_opportunity_desk,
-        get_opportunities_for_africans, get_advance_africa, get_scholarship_positions,
-        get_scholars4dev, get_youth_opportunities, get_bright_scholarships,
-        get_world_scholarship_forum, get_scholarships_ads
+        get_opportunity_desk,
+        get_scholars4dev,
+        get_youth_opportunities,
     ]
-    
+
     log.info(f"Deep Discovery: Polling {len(sources)} sources in parallel...")
     all_results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
@@ -521,7 +520,7 @@ def get_all_opportunities(category=None, use_cache=True):
                 log.info(f"   + {len(res)} from {src_name}")
             except Exception as e:
                 log.error(f"Error polling {src_name}: {e}")
-            
+
     all_opps = curated + all_results
 
     # Update cache (global, for all categories)
@@ -533,7 +532,7 @@ def get_all_opportunities(category=None, use_cache=True):
         if key not in seen_keys and o["title"]:
             seen_keys.add(key)
             cleaned.append(o)
-    
+
     GLOBAL_CACHE = cleaned
     LAST_FETCH_TIME = now
     log.info(f"Cache updated: {len(GLOBAL_CACHE)} unique opportunities")
@@ -541,7 +540,7 @@ def get_all_opportunities(category=None, use_cache=True):
     # Return filtered
     if category and category != "all":
         cleaned = [o for o in cleaned if o["category"] == category]
-    
+
     return cleaned
 
 
@@ -602,10 +601,10 @@ def broadcast_opportunities(force=False):
         log.info("Test Mode: Bypassing duplicate filters.")
     else:
         new_opps = [o for o in all_opps if o["id"] not in sent_ids or o["id"].startswith("cur_")]
-    
+
     if len(new_opps) < MAX_OPPS and not force:
         new_opps = all_opps  # reset if too few in daily mode
-    
+
     to_send = new_opps[:MAX_OPPS]
     log.info(f"Targeting {len(to_send)} opportunities for {len(subscribers)} subscribers.")
     message = build_message(to_send)
@@ -636,25 +635,25 @@ def run_scheduler():
         log.info(f"Scheduler started — INTERVAL MODE: sending every {TEST_INTERVAL_MINS} minute(s)")
     else:
         log.info(f"Scheduler started — DAILY MODE: sending at {SEND_TIME} EAT (Nairobi)")
-    
+
     send_hour, send_min = map(int, SEND_TIME.split(":"))
 
     while True:
         try:
             now = now_eat()
-            
+
             if TEST_INTERVAL_MINS > 0:
                 # ─── Interval Mode ───
                 last_ts = load_last_run_timestamp()
                 now_ts  = int(now.timestamp())
                 wait_sec = (last_ts + TEST_INTERVAL_MINS * 60) - now_ts
-                
+
                 if wait_sec <= 0:
                     log.info(f"Interval trigger — sending broadcast ({TEST_INTERVAL_MINS} min interval)")
                     broadcast_opportunities(force=True)
                     save_last_run(ts=now_ts)
                 else:
-                    if now_ts % 60 == 0: # Log every minute to reduce spam
+                    if now_ts % 60 == 0:  # Log every minute to reduce spam
                         log.info(f"Interval Mode: Next trigger in {wait_sec}s")
             else:
                 # ─── Daily Mode ───
@@ -667,7 +666,7 @@ def run_scheduler():
                     log.info(f"Daily trigger — sending broadcast (Nairobi: {now.strftime('%H:%M EAT')})")
                     broadcast_opportunities()
                     save_last_run(day_str=today_str)
-                    
+
         except Exception as ex:
             log.error(f"Scheduler error: {ex}")
         time.sleep(20)
@@ -688,7 +687,7 @@ def process_update(data):
             category = action.replace("cat_", "") if action.startswith("cat_") else None
             if category == "all":
                 category = None
-            
+
             # LIGHTNING MODE: Send cached results immediately
             opps    = get_all_opportunities(category, use_cache=True)
             send_message(chat_id, build_message(opps, category), reply_markup=MAIN_BUTTONS)
@@ -774,12 +773,14 @@ def process_update(data):
                 "👇 Choose what you're looking for:",
                 reply_markup=MAIN_BUTTONS
             )
-            
+
     except Exception as e:
         log.error(f"Error processing update: {e}")
 
-@app.route(f"/webhook/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
-def webhook():
+@app.route(f"/webhook/<token>", methods=["POST"])
+def webhook(token):
+    if token != TELEGRAM_BOT_TOKEN:
+        return "forbidden", 403
     data = request.get_json()
     if data:
         # Offload logic to background thread to return 200 OK instantly
@@ -967,12 +968,13 @@ function loadData() {
   fetch("/admin/stats", { headers: { "X-Admin-Password": password } })
     .then(r => r.json()).then(d => {
       document.getElementById("subCount").textContent = d.subscriber_count;
-      document.getElementById("broadcastTime").textContent = d.send_time + " AM EAT";
+      const bt = d.send_time || "09:00";
+      document.getElementById("broadcastTime").textContent = bt.includes(":") ? bt + " EAT" : bt + ":00 EAT";
       const modeEl = document.getElementById("schedulerMode");
       if (d.test_interval > 0) {
-        modeEl.innerHTML = `<span class="tag tag-orange">Interval (${d.test_interval}m)</span>`;
+        modeEl.innerHTML = '<span class="tag tag-orange">Interval (' + d.test_interval + 'm)</span>';
       } else {
-        modeEl.innerHTML = `<span class="tag tag-green">Daily</span>`;
+        modeEl.innerHTML = '<span class="tag tag-green">Daily</span>';
       }
     });
   loadSubscribers();
@@ -985,14 +987,14 @@ function loadSubscribers() {
         list.innerHTML = '<p style="color:#888;font-size:13px">No subscribers yet!</p>';
         return;
       }
-      list.innerHTML = data.subscribers.map(s => `
-        <div class="subscriber">
-          <div class="avatar">${s.name[0].toUpperCase()}</div>
-          <div class="sub-info">
-            <div class="sub-name">${s.name}</div>
-            <div class="sub-meta">${s.username ? "@"+s.username : "No username"} · ${s.joined}</div>
-          </div>
-        </div>`).join("");
+      list.innerHTML = data.subscribers.map(s =>
+        '<div class="subscriber">' +
+        '<div class="avatar">' + (s.name[0] || "?").toUpperCase() + '</div>' +
+        '<div class="sub-info">' +
+        '<div class="sub-name">' + (s.name || "Unknown") + '</div>' +
+        '<div class="sub-meta">' + (s.username ? "@" + s.username : "No username") + ' · ' + (s.joined || "") + '</div>' +
+        '</div></div>'
+      ).join("");
       document.getElementById("subCount").textContent = data.subscribers.length;
     });
 }
@@ -1002,9 +1004,9 @@ function broadcast() {
   box.textContent = "⏳ Sending opportunities to all subscribers...";
   fetch("/admin/broadcast", { method: "POST", headers: { "X-Admin-Password": password } })
     .then(r => r.json()).then(d => {
-      box.textContent = `✅ Sent to ${d.sent} subscribers with ${d.opps} opportunities!`;
+      box.textContent = "✅ Sent to " + d.sent + " subscribers with " + d.opps + " opportunities!";
       showToast("✅ Done!");
-    }).catch(() => { box.textContent = "❌ Something went wrong."; });
+    }).catch(function() { box.textContent = "❌ Something went wrong."; });
 }
 function testBroadcast() {
   const box = document.getElementById("resultBox");
@@ -1012,16 +1014,16 @@ function testBroadcast() {
   box.textContent = "⏳ Sending test broadcast to admin...";
   fetch("/admin/test-broadcast", { method: "POST", headers: { "X-Admin-Password": password } })
     .then(r => r.json()).then(d => {
-      box.textContent = d.success ? "✅ Test message sent to admin!" : "❌ " + d.error;
+      box.textContent = d.success ? "✅ Test message sent to admin!" : "❌ " + (d.error || "Error");
       showToast(d.success ? "✅ Done!" : "❌ Error");
-    }).catch(() => { box.textContent = "❌ Something went wrong."; });
+    }).catch(function() { box.textContent = "❌ Something went wrong."; });
 }
 function showToast(msg) {
   const t = document.getElementById("toast");
   t.textContent = msg; t.style.display = "block";
-  setTimeout(() => t.style.display = "none", 3000);
+  setTimeout(function() { t.style.display = "none"; }, 3000);
 }
-document.getElementById("pwInput").addEventListener("keydown", e => { if (e.key==="Enter") login(); });
+document.getElementById("pwInput").addEventListener("keydown", function(e) { if (e.key === "Enter") login(); });
 </script>
 </body>
 </html>
@@ -1061,15 +1063,14 @@ def admin_broadcast():
 @app.route("/admin/test-broadcast", methods=["POST"])
 def admin_test_broadcast():
     if not check_admin(request): return jsonify({"error": "Unauthorized"}), 401
-    # Try to find a 'chat_id' for testing (e.g. from the .env if set, or just use first subscriber)
     test_id = os.getenv("TELEGRAM_CHAT_ID")
     if not test_id:
         subs = load_subscribers()
         if subs: test_id = list(subs.keys())[0]
-    
+
     if not test_id:
         return jsonify({"success": False, "error": "No subscriber found for testing"})
-    
+
     all_opps = get_all_opportunities()
     message = build_message(all_opps[:MAX_OPPS])
     success = send_message(test_id, "🧪 <b>TEST BROADCAST</b>\n\n" + message)
@@ -1108,15 +1109,17 @@ def self_ping():
 
 def setup_webhook():
     url = os.getenv("RAILWAY_STATIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
-    if url:
-        set_webhook(f"https://{url}/webhook/{TELEGRAM_BOT_TOKEN}")
+    if url and TELEGRAM_BOT_TOKEN:
+        full = f"https://{url}/webhook/{TELEGRAM_BOT_TOKEN}"
+        set_webhook(full)
 
 # Start background threads at module level so gunicorn picks them up
-setup_webhook()
+if TELEGRAM_BOT_TOKEN:
+    setup_webhook()
 threading.Thread(target=run_scheduler,           daemon=True).start()
 threading.Thread(target=self_ping,               daemon=True).start()
 threading.Thread(target=background_cache_refresh, daemon=True).start()
-log.info(f"Bot started — scheduler and lightning cache active")
+log.info("Bot started — scheduler and lightning cache active")
 
 if __name__ == "__main__":
     log.info(f"Running directly on port {PORT}")
