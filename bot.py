@@ -13,6 +13,7 @@ import requests
 import schedule
 import time
 import threading
+import concurrent.futures
 import html
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -469,7 +470,6 @@ def get_all_opportunities(category=None):
     curated = get_curated_opportunities()
 
     # Add live RSS sources on top (Deep Discovery)
-    all_results = []
     sources = [
         get_scholarship_region,
         get_afterschool_africa,
@@ -477,21 +477,25 @@ def get_all_opportunities(category=None):
         get_opportunities_for_africans,
         get_advance_africa,
         get_scholarship_positions,
-        get_scholars4dev, # Keep existing one
+        get_scholars4dev,
         get_youth_opportunities,
         get_bright_scholarships,
         get_world_scholarship_forum,
         get_scholarships_ads
     ]
     
-    log.info(f"Deep Discovery: Polling {len(sources)} major aggregators...")
-    for getter in sources:
-        try:
-            res = getter()
-            all_results.extend(res)
-            log.info(f"   + {len(res)} from {getter.__name__}")
-        except Exception as e:
-            log.error(f"Error polling {getter.__name__}: {e}")
+    log.info(f"Deep Discovery: Polling {len(sources)} major aggregators in parallel...")
+    all_results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_source = {executor.submit(getter): getter.__name__ for getter in sources}
+        for future in concurrent.futures.as_completed(future_to_source):
+            src_name = future_to_source[future]
+            try:
+                res = future.result()
+                all_results.extend(res)
+                log.info(f"   + {len(res)} from {src_name}")
+            except Exception as e:
+                log.error(f"Error polling {src_name}: {e}")
             
     all_opps = curated + all_results
 
