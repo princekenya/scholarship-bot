@@ -539,23 +539,29 @@ def broadcast_opportunities():
 
 def run_scheduler():
     """
-    Runs a loop checking every 30 seconds if it's time to broadcast.
-    Uses Kenyan time (EAT = UTC+3) for accuracy.
+    Bulletproof scheduler using Kenyan time.
+    Checks every 20 seconds. If it is past send time and not yet sent today, sends immediately.
+    This means even if the bot restarts mid-day, it will still send that day.
     """
-    log.info(f"Scheduler started — will broadcast daily at {SEND_TIME} EAT (Nairobi time)")
-    last_broadcast_date = None
+    log.info(f"Scheduler started — daily broadcast at {SEND_TIME} EAT (Nairobi)")
+    last_sent_day = None
+    send_hour, send_min = map(int, SEND_TIME.split(":"))
 
     while True:
-        now        = now_eat()
-        today_str  = now.strftime("%Y-%m-%d")
-        now_time   = now.strftime("%H:%M")
+        try:
+            now       = now_eat()
+            today_str = now.strftime("%Y-%m-%d")
+            now_total = now.hour * 60 + now.minute
+            snd_total = send_hour * 60 + send_min
 
-        if now_time == SEND_TIME and last_broadcast_date != today_str:
-            log.info(f"It's {SEND_TIME} EAT — broadcasting now!")
-            broadcast_opportunities()
-            last_broadcast_date = today_str
-
-        time.sleep(30)
+            # Send if: past send time today AND not yet sent today
+            if now_total >= snd_total and last_sent_day != today_str:
+                log.info(f"Sending daily broadcast — Nairobi: {now.strftime('%H:%M EAT')}")
+                broadcast_opportunities()
+                last_sent_day = today_str
+        except Exception as ex:
+            log.error(f"Scheduler error: {ex}")
+        time.sleep(20)
 
 
 # ─── Webhook Handler ─────────────────────────────────────────────────────────
