@@ -13,6 +13,7 @@ import requests
 import schedule
 import time
 import threading
+import html
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -84,7 +85,7 @@ def now_eat():
 
 # ─── Telegram Helpers ────────────────────────────────────────────────────────
 
-def send_message(chat_id, text, parse_mode="Markdown", reply_markup=None):
+def send_message(chat_id, text, parse_mode="HTML", reply_markup=None):
     try:
         payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
         if reply_markup:
@@ -485,18 +486,21 @@ def build_message(opps, category=None):
         "grant":       "💰 Grants & Funding",
     }.get(category, "🔥 All Opportunities")
 
-    msg = f"{cat_label} *for Kenyan Students*\n📅 {today}\n\n"
+    msg = f"<b>{cat_label} for Kenyan Students</b>\n📅 {today}\n\n"
 
     to_show = opps[:MAX_OPPS]
     for i, o in enumerate(to_show, 1):
         emoji = CATEGORY_EMOJI.get(o["category"], "📌")
-        msg  += f"{emoji} *{i}. {o['title']}*\n"
+        title = html.escape(o['title'])
+        source = html.escape(o['source'])
+        msg  += f"{emoji} <b>{i}. {title}</b>\n"
         if o.get("deadline") and o["deadline"] != "See link":
-            msg += f"   ⏰ *Deadline:* {o['deadline']}\n"
-        msg += f"   🔗 {o['url']}\n"
-        msg += f"   📌 _{o['source']}_\n\n"
+            deadline = html.escape(o['deadline'])
+            msg += f"   ⏰ <b>Deadline:</b> {deadline}\n"
+        msg += f"   🔗 <a href='{o['url']}'>Click Here to Apply</a>\n"
+        msg += f"   📌 <i>{source}</i>\n\n"
 
-    msg += f"_Showing {len(to_show)} opportunities. Tap a button for more 👇_"
+    msg += f"<i>Showing {len(to_show)} opportunities. Tap a button for more 👇</i>"
     return msg
 
 
@@ -609,13 +613,13 @@ def webhook():
             log.info(f"New subscriber: {name} ({chat_id})")
 
         send_message(chat_id,
-            f"👋 *Habari {name}!* Welcome to the *Kenya Scholarship Bot!* 🇰🇪🎓\n\n"
-            f"I send you *direct application links* for scholarships, fellowships, internships and grants — "
+            f"👋 <b>Habari {name}!</b> Welcome to the <b>Kenya Scholarship Bot!</b> 🇰🇪🎓\n\n"
+            f"I send you <b>direct application links</b> for scholarships, fellowships, internships and grants — "
             f"all open to Kenyan students!\n\n"
-            f"📅 *Daily update:* Every day at *{SEND_TIME} Nairobi time*\n"
-            f"🔗 *All links* go directly to application pages\n"
-            f"✅ *Minimum 15 opportunities* every broadcast\n\n"
-            f"👇 *What are you looking for today?*",
+            f"📅 <b>Daily update:</b> Every day at <b>{SEND_TIME} Nairobi time</b>\n"
+            f"🔗 <b>All links</b> go directly to application pages\n"
+            f"✅ <b>Minimum 15 opportunities</b> every broadcast\n\n"
+            f"👇 <b>What are you looking for today?</b>",
             reply_markup=MAIN_BUTTONS
         )
 
@@ -634,30 +638,30 @@ def webhook():
 
     elif text == "/count":
         send_message(chat_id,
-            f"👥 *Total subscribers:* {len(subscribers)}\n\n"
-            f"🕐 *Current Nairobi time:* {now_eat().strftime('%I:%M %p EAT')}",
+            f"👥 <b>Total subscribers:</b> {len(subscribers)}\n\n"
+            f"🕐 <b>Current Nairobi time:</b> {now_eat().strftime('%I:%M %p EAT')}",
             reply_markup=MAIN_BUTTONS
         )
 
     elif text == "/time":
         send_message(chat_id,
-            f"🕐 *Current Nairobi time:* {now_eat().strftime('%A, %d %b %Y · %I:%M %p EAT')}\n"
-            f"📅 *Next broadcast:* Today/Tomorrow at *{SEND_TIME} EAT*",
+            f"🕐 <b>Current Nairobi time:</b> {now_eat().strftime('%A, %d %b %Y · %I:%M %p EAT')}\n"
+            f"📅 <b>Next broadcast:</b> Today/Tomorrow at <b>{SEND_TIME} EAT</b>",
             reply_markup=MAIN_BUTTONS
         )
 
     elif text == "/help":
         send_message(chat_id,
-            "🤖 *Kenya Scholarship & Opportunity Bot*\n\n"
-            "📡 *Sources:* Opportunity Desk, Scholars4Dev, Youth Opportunities + 30 curated links\n"
-            "🔗 *All links* go directly to application pages\n"
-            "✅ *Minimum 15* opportunities per broadcast\n"
-            f"⏰ *Sends daily at {SEND_TIME} Nairobi time*\n\n"
-            "*/start* — Subscribe\n"
-            "*/opportunities* — Get all opportunities now\n"
-            "*/time* — Check current Nairobi time\n"
-            "*/stop* — Unsubscribe\n"
-            "*/help* — This message\n\n"
+            "🤖 <b>Kenya Scholarship & Opportunity Bot</b>\n\n"
+            "📡 <b>Sources:</b> Opportunity Desk, Scholars4Dev, Youth Opportunities + 30 curated links\n"
+            "🔗 <b>All links</b> go directly to application pages\n"
+            "✅ <b>Minimum 15</b> opportunities per broadcast\n"
+            f"⏰ <b>Sends daily at {SEND_TIME} Nairobi time</b>\n\n"
+            "<b>/start</b> — Subscribe\n"
+            "<b>/opportunities</b> — Get all opportunities now\n"
+            "<b>/time</b> — Check current Nairobi time\n"
+            "<b>/stop</b> — Unsubscribe\n"
+            "<b>/help</b> — This message\n\n"
             "👇 Or tap a category:",
             reply_markup=MAIN_BUTTONS
         )
