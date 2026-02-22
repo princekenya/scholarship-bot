@@ -31,6 +31,7 @@ SEND_TIME          = os.getenv("SEND_TIME", "09:00")   # Kenyan time (EAT)
 MAX_OPPS           = int(os.getenv("MAX_OPPS", "15"))
 ADMIN_PASSWORD     = os.getenv("ADMIN_PASSWORD", "scholar2024")
 PORT               = int(os.getenv("PORT", "5000"))
+TEST_INTERVAL_MINS = int(os.getenv("TEST_INTERVAL_MINS", "0"))  # 0 or missing = Daily mode
 
 EAT                = ZoneInfo("Africa/Nairobi")   # East Africa Time = UTC+3
 
@@ -89,9 +90,23 @@ def load_last_run():
             return json.load(f).get("last_sent_day")
     return None
 
-def save_last_run(day_str):
+def load_last_run_timestamp():
+    if os.path.exists(LAST_RUN_FILE):
+        try:
+            with open(LAST_RUN_FILE) as f:
+                return json.load(f).get("last_sent_ts") or 0
+        except Exception: pass
+    return 0
+
+def save_last_run(day_str=None, ts=None):
+    data = {}
+    if os.path.exists(LAST_RUN_FILE):
+        with open(LAST_RUN_FILE) as f:
+            data = json.load(f)
+    if day_str: data["last_sent_day"] = day_str
+    if ts: data["last_sent_ts"] = ts
     with open(LAST_RUN_FILE, "w") as f:
-        json.dump({"last_sent_day": day_str}, f)
+        json.dump(data, f)
 
 
 # ─── Telegram Helpers ────────────────────────────────────────────────────────
@@ -517,22 +532,29 @@ def build_message(opps, category=None):
 
 # ─── Broadcast ───────────────────────────────────────────────────────────────
 
-def broadcast_opportunities():
-    log.info("─── Daily broadcast ───")
+def broadcast_opportunities(force=False):
+    log.info("─── Broadcast process started ───")
     subscribers = load_subscribers()
     if not subscribers:
-        log.info("No subscribers.")
+        log.info("No subscribers found.")
         return {"sent": 0, "failed": 0, "opps": 0}
 
     sent_ids = load_sent_ids()
     all_opps = get_all_opportunities()
 
     # Filter already sent, but always keep curated ones
-    new_opps = [o for o in all_opps if o["id"] not in sent_ids or o["id"].startswith("cur_")]
-    if len(new_opps) < MAX_OPPS:
-        new_opps = all_opps  # reset if too few
-
+    # If force=True (test mode), we ignore sent_ids to ensure something is sent
+    if force:
+        new_opps = all_opps
+        log.info("Test Mode: Bypassing duplicate filters.")
+    else:
+        new_opps = [o for o in all_opps if o["id"] not in sent_ids or o["id"].startswith("cur_")]
+    
+    if len(new_opps) < MAX_OPPS and not force:
+        new_opps = all_opps  # reset if too few in daily mode
+    
     to_send = new_opps[:MAX_OPPS]
+    log.info(f"Targeting {len(to_send)} opportunities for {len(subscribers)} subscribers.")
     message = build_message(to_send)
 
     sent, failed = 0, 0
@@ -555,26 +577,44 @@ def broadcast_opportunities():
 def run_scheduler():
     """
     Bulletproof scheduler using Kenyan time.
-    Checks every 20 seconds. If it is past send time and not yet sent today, sends immediately.
-    Uses persistent file storage so restarts don't trigger double sends (or miss sends).
+    Supports either Daily Mode or Interval Mode (for testing).
     """
-    log.info(f"Scheduler started — daily broadcast at {SEND_TIME} EAT (Nairobi)")
+    if TEST_INTERVAL_MINS > 0:
+        log.info(f"Scheduler started — INTERVAL MODE: sending every {TEST_INTERVAL_MINS} minute(s)")
+    else:
+        log.info(f"Scheduler started — DAILY MODE: sending at {SEND_TIME} EAT (Nairobi)")
+    
     send_hour, send_min = map(int, SEND_TIME.split(":"))
 
     while True:
         try:
-            now           = now_eat()
-            today_str     = now.strftime("%Y-%m-%d")
-            last_sent_day = load_last_run()
+            now = now_eat()
             
-            now_total = now.hour * 60 + now.minute
-            snd_total = send_hour * 60 + send_min
+            if TEST_INTERVAL_MINS > 0:
+                # ─── Interval Mode ───
+                last_ts = load_last_run_timestamp()
+                now_ts  = int(now.timestamp())
+                wait_sec = (last_ts + TEST_INTERVAL_MINS * 60) - now_ts
+                
+                if wait_sec <= 0:
+                    log.info(f"Interval trigger — sending broadcast ({TEST_INTERVAL_MINS} min interval)")
+                    broadcast_opportunities(force=True)
+                    save_last_run(ts=now_ts)
+                else:
+                    if now_ts % 60 == 0: # Log every minute to reduce spam
+                        log.info(f"Interval Mode: Next trigger in {wait_sec}s")
+            else:
+                # ─── Daily Mode ───
+                today_str     = now.strftime("%Y-%m-%d")
+                last_sent_day = load_last_run()
+                now_total     = now.hour * 60 + now.minute
+                snd_total     = send_hour * 60 + send_min
 
-            # Send if: past send time today AND not yet sent today
-            if now_total >= snd_total and last_sent_day != today_str:
-                log.info(f"Sending daily broadcast — Nairobi: {now.strftime('%H:%M EAT')}")
-                broadcast_opportunities()
-                save_last_run(today_str)
+                if now_total >= snd_total and last_sent_day != today_str:
+                    log.info(f"Daily trigger — sending broadcast (Nairobi: {now.strftime('%H:%M EAT')})")
+                    broadcast_opportunities()
+                    save_last_run(day_str=today_str)
+                    
         except Exception as ex:
             log.error(f"Scheduler error: {ex}")
         time.sleep(20)
@@ -778,8 +818,12 @@ ADMIN_HTML = """
         <span class="stat-value" id="subCount">—</span>
       </div>
       <div class="stat">
+        <span class="stat-label">Scheduler Mode</span>
+        <span class="stat-value" id="schedulerMode">—</span>
+      </div>
+      <div class="stat">
         <span class="stat-label">Daily Broadcast Time</span>
-        <span class="stat-value">09:00 AM EAT</span>
+        <span class="stat-value" id="broadcastTime">09:00 AM EAT</span>
       </div>
       <div class="stat">
         <span class="stat-label">Min Opportunities Per Broadcast</span>
@@ -863,6 +907,13 @@ function loadData() {
   fetch("/admin/stats", { headers: { "X-Admin-Password": password } })
     .then(r => r.json()).then(d => {
       document.getElementById("subCount").textContent = d.subscriber_count;
+      document.getElementById("broadcastTime").textContent = d.send_time + " AM EAT";
+      const modeEl = document.getElementById("schedulerMode");
+      if (d.test_interval > 0) {
+        modeEl.innerHTML = `<span class="tag tag-orange">Interval (${d.test_interval}m)</span>`;
+      } else {
+        modeEl.innerHTML = `<span class="tag tag-green">Daily</span>`;
+      }
     });
   loadSubscribers();
 }
@@ -929,6 +980,7 @@ def admin_stats():
     return jsonify({
         "subscriber_count": len(load_subscribers()),
         "send_time": SEND_TIME,
+        "test_interval": TEST_INTERVAL_MINS,
         "nairobi_time": now_eat().strftime("%I:%M %p EAT")
     })
 
