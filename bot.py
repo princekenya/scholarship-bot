@@ -466,6 +466,23 @@ def detect_category(title):
     return "scholarship"
 
 
+# ─── Lightning Mode (Background Pre-fetch) ──────────────────────────────────
+
+def background_cache_refresh():
+    """Background thread that keeps the memory cache warm every 20 minutes."""
+    log.info("Background cache refresher started (20 min interval)")
+    # Initial wait to let the bot boot up
+    time.sleep(5) 
+    while True:
+        try:
+            log.info("Lightning Mode: Triggering background fetch...")
+            get_all_opportunities(use_cache=False)
+            log.info("Lightning Mode: Background cache update successful.")
+        except Exception as e:
+            log.error(f"Lightning Mode: Background refresh error: {e}")
+        time.sleep(1200) # 20 minutes
+
+
 # ─── Aggregator ──────────────────────────────────────────────────────────────
 
 def get_all_opportunities(category=None, use_cache=True):
@@ -671,8 +688,9 @@ def process_update(data):
             category = action.replace("cat_", "") if action.startswith("cat_") else None
             if category == "all":
                 category = None
-            send_message(chat_id, "⏳ Fetching latest opportunities...")
-            opps    = get_all_opportunities(category)
+            
+            # LIGHTNING MODE: Send cached results immediately
+            opps    = get_all_opportunities(category, use_cache=True)
             send_message(chat_id, build_message(opps, category), reply_markup=MAIN_BUTTONS)
             return
 
@@ -717,8 +735,8 @@ def process_update(data):
             )
 
         elif text in ["/opportunities", "/opps"]:
-            send_message(chat_id, "⏳ Fetching the latest opportunities...")
-            opps = get_all_opportunities()
+            # LIGHTNING MODE: Send cached results immediately
+            opps = get_all_opportunities(use_cache=True)
             send_message(chat_id, build_message(opps), reply_markup=MAIN_BUTTONS)
 
         elif text == "/count":
@@ -1095,9 +1113,10 @@ def setup_webhook():
 
 # Start background threads at module level so gunicorn picks them up
 setup_webhook()
-threading.Thread(target=run_scheduler, daemon=True).start()
-threading.Thread(target=self_ping,     daemon=True).start()
-log.info(f"Bot started — scheduler running, daily at {SEND_TIME} Nairobi time")
+threading.Thread(target=run_scheduler,           daemon=True).start()
+threading.Thread(target=self_ping,               daemon=True).start()
+threading.Thread(target=background_cache_refresh, daemon=True).start()
+log.info(f"Bot started — scheduler and lightning cache active")
 
 if __name__ == "__main__":
     log.info(f"Running directly on port {PORT}")
